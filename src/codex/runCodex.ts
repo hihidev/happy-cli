@@ -27,6 +27,7 @@ import { notifyDaemonSessionStarted } from "@/daemon/controlClient";
 import { registerKillSessionHandler } from "@/claude/registerKillSessionHandler";
 import { delay } from "@/utils/time";
 import { stopCaffeinate } from "@/utils/caffeinate";
+import { spawnSync } from 'node:child_process';
 
 type ReadyEventOptions = {
     pending: unknown;
@@ -536,12 +537,80 @@ export async function runCodex(opts: {
     // Start Happy MCP server (HTTP) and prepare STDIO bridge config for Codex
     const happyServer = await startHappyServer(session);
     const bridgeCommand = join(projectPath(), 'bin', 'happy-mcp.mjs');
-    const mcpServers = {
-        happy: {
-            command: bridgeCommand,
-            args: ['--url', happyServer.url]
+
+    // Discover user MCPs by calling `codex mcp list --json` and map them into
+    // the session-level mcp_servers config. If codex is missing or returns
+    // invalid JSON, we fall back to only exposing the happy bridge.
+    let externalMcpServers: Record<string, any> = {};
+    try {
+        const res = spawnSync('codex', ['mcp', 'list', '--json'], {
+            encoding: 'utf8',
+            env: process.env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 7000,
+            maxBuffer: 1024 * 1024,
+        });
+
+        if (res && res.status === 0 && typeof res.stdout === 'string') {
+            const out = res.stdout.trim();
+            if (out.length > 0) {
+                try {
+                    const parsed = JSON.parse(out);
+
+                    if (Array.isArray(parsed)) {
+                        for (const entry of parsed) {
+                            if (!entry || !entry.name) continue;
+                            const name: string = entry.name;
+
+                            if (entry.transport && typeof entry.transport === 'object') {
+                                const t = entry.transport as any;
+
+                                // 1) HTTP MCPs (streamable_http) -> { url, optional headers }
+                                if (t.type === 'streamable_http' && t.url) {
+                                    const cfg: any = { url: t.url };
+                                    if (t.bearer_token_env_var) cfg.bearer_token_env_var = t.bearer_token_env_var;
+                                    if (t.http_headers) cfg.http_headers = t.http_headers;
+                                    if (t.env_http_headers) cfg.env_http_headers = t.env_http_headers;
+                                    externalMcpServers[name] = cfg;
+                                    continue;
+                                }
+
+                                // 2) Local process / stdio MCPs (e.g. basic-memory)
+                                if ((t.type === 'stdio' || t.type === 'process' || !t.type) && t.command) {
+                                    const cfg: any = { command: t.command };
+                                    if (Array.isArray(t.args)) cfg.args = t.args;
+                                    if (t.env) cfg.env = t.env;
+                                    externalMcpServers[name] = cfg;
+                                    continue;
+                                }
+                            }
+
+                            // Fallback: pass through common keys if present
+                            const passThroughKeys = ['command', 'args', 'env', 'url', 'enabled', 'startup_timeout_sec', 'tool_timeout_sec'];
+                            const cfg: any = {};
+                            for (const k of passThroughKeys) {
+                                if (k in entry) cfg[k] = (entry as any)[k];
+                            }
+                            externalMcpServers[name] = Object.keys(cfg).length ? cfg : entry;
+                        }
+                    } else if (parsed && typeof parsed === 'object') {
+                        externalMcpServers = parsed as Record<string, any>;
+                    }
+                } catch {
+                    // JSON parse error - ignore and fall back to bridge-only
+                }
+            }
         }
-    } as const;
+    } catch {
+        // spawnSync failed (codex missing, etc.) - ignore and fall back
+    }
+
+    // Merge external MCPs with the happy bridge. The happy bridge is always kept
+    // and cannot be overridden by a user MCP named "happy".
+    const mcpServers = {
+        ...externalMcpServers,
+        happy: { command: bridgeCommand, args: ['--url', happyServer.url] },
+    };
     let first = true;
 
     try {
