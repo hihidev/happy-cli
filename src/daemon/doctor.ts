@@ -24,6 +24,8 @@ export async function findAllHappyProcesses(): Promise<Array<{ pid: number, comm
       const isHappy = name.includes('happy') || 
                       name === 'node' && (cmd.includes('happy-cli') || cmd.includes('dist/index.mjs')) ||
                       cmd.includes('happy.mjs') ||
+                      cmd.includes('happy-mcp') ||
+                      cmd.includes('happyMcpStdioBridge') ||
                       cmd.includes('happy-coder') ||
                       (cmd.includes('tsx') && cmd.includes('src/index.ts') && cmd.includes('happy-cli'));
       
@@ -33,6 +35,8 @@ export async function findAllHappyProcesses(): Promise<Array<{ pid: number, comm
       let type = 'unknown';
       if (proc.pid === process.pid) {
         type = 'current';
+      } else if (cmd.includes('happy-mcp') || cmd.includes('happyMcpStdioBridge')) {
+        type = 'mcp-bridge';
       } else if (cmd.includes('--version')) {
         type = cmd.includes('tsx') ? 'dev-daemon-version-check' : 'daemon-version-check';
       } else if (cmd.includes('daemon start-sync') || cmd.includes('daemon start')) {
@@ -71,7 +75,8 @@ export async function findRunawayHappyProcesses(): Promise<Array<{ pid: number, 
         p.type === 'daemon-spawned-session' ||
         p.type === 'dev-daemon-spawned' ||
         p.type === 'daemon-version-check' ||
-        p.type === 'dev-daemon-version-check'
+        p.type === 'dev-daemon-version-check' ||
+        p.type === 'mcp-bridge'
       )
     )
     .map(p => ({ pid: p.pid, command: p.command }));

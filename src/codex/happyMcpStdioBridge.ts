@@ -43,6 +43,22 @@ async function main() {
   }
 
   let httpClient: Client | null = null;
+  let shuttingDown = false;
+
+  const shutdown = (reason: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    process.stderr.write(`[happy-mcp] ${reason}\n`);
+    process.exit(0);
+  };
+
+  process.stdin.on('end', () => shutdown('stdin ended'));
+  process.stdin.on('close', () => shutdown('stdin closed'));
+
+  const parentWatch = setInterval(() => {
+    if (process.ppid === 1) shutdown('parent exited');
+  }, 10_000);
+  parentWatch.unref();
 
   async function ensureHttpClient(): Promise<Client> {
     if (httpClient) return httpClient;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'child_process';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { join, dirname } from 'path';
 
@@ -12,19 +12,41 @@ if (!hasNoWarnings || !hasNoDeprecation) {
   const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
   const entrypoint = join(projectRoot, 'dist', 'codex', 'happyMcpStdioBridge.mjs');
 
-  try {
-    execFileSync(process.execPath, [
-      '--no-warnings',
-      '--no-deprecation',
-      entrypoint,
-      ...process.argv.slice(2)
-    ], {
-      stdio: 'inherit',
-      env: process.env
+  // Use spawn instead of execFileSync for proper signal forwarding
+  const child = spawn(process.execPath, [
+    '--no-warnings',
+    '--no-deprecation',
+    entrypoint,
+    ...process.argv.slice(2)
+  ], {
+    stdio: 'inherit',
+    env: process.env
+  });
+
+  // Forward signals to the child process
+  const signals = ['SIGTERM', 'SIGINT', 'SIGHUP', 'SIGUSR1', 'SIGUSR2'];
+  for (const signal of signals) {
+    process.on(signal, () => {
+      if (!child.killed) {
+        child.kill(signal);
+      }
     });
-  } catch (error) {
-    process.exit(error.status || 1);
   }
+
+  // Exit when child exits
+  child.on('exit', (code, signal) => {
+    if (signal) {
+      process.exit(128 + 15); // Standard exit code for terminated by signal
+    } else {
+      process.exit(code || 0);
+    }
+  });
+
+  // Handle errors
+  child.on('error', (error) => {
+    process.stderr.write(`[happy-mcp-wrapper] Failed to start bridge: ${error.message}\n`);
+    process.exit(1);
+  });
 } else {
   // Already have desired flags; import module directly
   import('../dist/codex/happyMcpStdioBridge.mjs');
