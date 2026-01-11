@@ -289,6 +289,9 @@ export async function runCodex(opts: {
             // Stop Happy MCP server
             happyServer.stop();
 
+            // CRITICAL: Disconnect Codex MCP client to kill spawned processes
+            await client.disconnect();
+
             logger.debug('[Codex] Session termination complete, exiting');
             process.exit(0);
         } catch (error) {

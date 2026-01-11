@@ -317,10 +317,39 @@ export class CodexMcpClient {
         }
 
         // As a last resort, if child still exists, send SIGKILL
+        // Also kill all descendants because codex spawns a wrapper that starts the actual binary
         if (pid) {
             try {
                 process.kill(pid, 0); // check if alive
-                logger.debug('[CodexMCP] Child still alive, sending SIGKILL');
+                logger.debug('[CodexMCP] Child still alive, killing all descendants first');
+
+                // Recursively find and kill all descendant processes
+                const killDescendants = async (parentPid: number) => {
+                    try {
+                        const { execSync } = await import('child_process');
+                        // Get direct children of the parent
+                        const children = execSync(`pgrep -P ${parentPid}`, { encoding: 'utf8' })
+                            .trim()
+                            .split('\n')
+                            .filter(Boolean)
+                            .map(Number);
+
+                        for (const childPid of children) {
+                            await killDescendants(childPid); // Recursively kill children first
+                            try {
+                                process.kill(childPid, 'SIGKILL');
+                                logger.debug(`[CodexMCP] Killed descendant pid=${childPid}`);
+                            } catch { /* may already be dead */ }
+                        }
+                    } catch {
+                        // pgrep returns non-zero if no children found
+                    }
+                };
+
+                await killDescendants(pid);
+
+                // Now kill the main child process
+                logger.debug(`[CodexMCP] Sending SIGKILL to child pid=${pid}`);
                 try { process.kill(pid, 'SIGKILL'); } catch {}
             } catch { /* not running */ }
         }
