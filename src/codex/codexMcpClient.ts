@@ -110,49 +110,45 @@ export class CodexMcpClient {
         // Register handler for exec command approval requests
         this.client.setRequestHandler(
             ElicitRequestSchema,
-            async (request) => {
-                console.log('[CodexMCP] Received elicitation request:', request.params);
+            async (request, extra) => {
+                logger.debug('[CodexMCP] Received elicitation request:', request.params);
 
-                // Load params
-                const params = request.params as unknown as {
-                    message: string,
-                    codex_elicitation: string,
-                    codex_mcp_tool_call_id: string,
-                    codex_event_id: string,
-                    codex_call_id: string,
-                    codex_command: string[],
-                    codex_cwd: string
-                }
+                // The MCP SDK's ElicitRequestParams only contains message, requestedSchema, and _meta.
+                // We use extra.requestId as the call ID since the custom fields (codex_call_id, etc.)
+                // that were expected don't exist in the actual MCP protocol.
+                const callId = String(extra.requestId);
                 const toolName = 'CodexBash';
 
                 // If no permission handler set, deny by default
                 if (!this.permissionHandler) {
                     logger.debug('[CodexMCP] No permission handler set, denying by default');
                     return {
-                        decision: 'denied' as const,
+                        action: 'decline' as const,
                     };
                 }
 
                 try {
                     // Request permission through the handler
                     const result = await this.permissionHandler.handleToolCall(
-                        params.codex_call_id,
+                        callId,
                         toolName,
                         {
-                            command: params.codex_command,
-                            cwd: params.codex_cwd
+                            command: [],
+                            cwd: process.cwd()
                         }
                     );
 
                     logger.debug('[CodexMCP] Permission result:', result);
+                    // ElicitResult uses 'action' (accept/decline/cancel) not 'decision'
                     return {
-                        decision: result.decision
+                        action: result.decision === 'approved' || result.decision === 'approved_for_session'
+                            ? 'accept' as const
+                            : 'decline' as const
                     }
                 } catch (error) {
                     logger.debug('[CodexMCP] Error handling permission request:', error);
                     return {
-                        decision: 'denied' as const,
-                        reason: error instanceof Error ? error.message : 'Permission request failed'
+                        action: 'decline' as const,
                     };
                 }
             }
