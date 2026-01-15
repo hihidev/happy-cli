@@ -6,7 +6,8 @@
  */
 
 import { join, resolve } from 'node:path';
-import { writeFileSync, mkdirSync, unlinkSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, unlinkSync, existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { configuration } from '@/configuration';
 import { logger } from '@/ui/logger';
 import { projectPath } from '@/projectPath';
@@ -29,7 +30,7 @@ export function generateHookSettingsFile(port: number): string {
     const forwarderScript = resolve(projectPath(), 'scripts', 'session_hook_forwarder.cjs');
     const hookCommand = `node "${forwarderScript}" ${port}`;
 
-    const settings = {
+    let settings: Record<string, any> = {
         hooks: {
             SessionStart: [
                 {
@@ -44,6 +45,37 @@ export function generateHookSettingsFile(port: number): string {
             ]
         }
     };
+
+    const happyHook = settings.hooks.SessionStart[0];
+    const claudeConfigDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+    const settingsPath = join(claudeConfigDir, 'settings.json');
+
+    if (existsSync(settingsPath)) {
+        try {
+            const userSettings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, any>;
+            const sessionStart = userSettings.hooks?.SessionStart;
+            const sessionStartArray = Array.isArray(sessionStart)
+                ? sessionStart
+                : sessionStart
+                    ? [sessionStart]
+                    : [];
+            const duplicate = sessionStartArray.some((entry) => {
+                return entry?.hooks?.some((hook: { command?: string }) => hook?.command === hookCommand);
+            });
+
+            if (duplicate) {
+                logger.warn('[generateHookSettings] Duplicate SessionStart hook detected; inserting anyway');
+            }
+
+            settings = { ...userSettings };
+            settings.hooks = settings.hooks || {};
+            settings.hooks.SessionStart = [happyHook, ...sessionStartArray];
+        } catch (error) {
+            logger.warn(`[generateHookSettings] Failed to read user settings: ${error}`);
+        }
+    } else {
+        logger.debug(`[generateHookSettings] No user settings at ${settingsPath}`);
+    }
 
     writeFileSync(filepath, JSON.stringify(settings, null, 2));
     logger.debug(`[generateHookSettings] Created hook settings file: ${filepath}`);
