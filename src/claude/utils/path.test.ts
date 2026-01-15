@@ -32,7 +32,7 @@ describe('getProjectPath', () => {
     vi.spyOn(os, 'homedir').mockReturnValue('/home/user');
     const workingDirectory = 'relative/path';
     const resolvedWorkingDirectory = join(process.cwd(), workingDirectory);
-    const projectId = resolvedWorkingDirectory.replace(/[\\\/.:]/g, '-');
+    const projectId = resolvedWorkingDirectory.replace(/[^a-zA-Z0-9]/g, '-');
     const expectedPath = join('/home/user', '.claude', 'projects', projectId);
     expect(getProjectPath(workingDirectory)).toBe(expectedPath);
   });
